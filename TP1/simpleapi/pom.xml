@@ -96,6 +96,18 @@
 				<version>${jacoco-maven-plugin.version}</version>
 				<configuration>
 					<append>true</append>
+					<includes>
+						<include>fr/takima/training/simpleapi/**/*</include>
+					</includes>
+					<excludes>
+						<exclude>com/sun/*</exclude>
+						<exclude>*HibernateInstantiator*</exclude>
+						<exclude>*HibernateProxy*</exclude>
+						<exclude>*MockitoMock*</exclude>
+						<exclude>java/*</exclude>
+						<exclude>jdk/*</exclude>
+						<exclude>sun/*</exclude>
+					</excludes>
 				</configuration>
 				<executions>
 					<execution>
