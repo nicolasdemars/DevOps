@@ -50,6 +50,7 @@
       no_log: true
 
     - name: Login to DockerHub
+      become: true
       ansible.builtin.command:
         cmd: docker login -u "{{ dockerhub_username }}" --password-stdin
         stdin: "{{ dockerhub_token }}"
@@ -57,6 +58,7 @@
       changed_when: false
 
     - name: Create Docker network
+      become: true
       ansible.builtin.command:
         argv:
           - docker
@@ -68,6 +70,7 @@
       failed_when: create_network.rc != 0 and 'already exists' not in create_network.stderr
 
     - name: Create database volume
+      become: true
       ansible.builtin.command:
         argv:
           - docker
@@ -77,6 +80,7 @@
       changed_when: false
 
     - name: Pull Docker images
+      become: true
       ansible.builtin.command:
         argv:
           - docker
@@ -89,6 +93,7 @@
       changed_when: true
 
     - name: Remove previous containers
+      become: true
       ansible.builtin.command:
         argv:
           - docker
@@ -102,6 +107,7 @@
       failed_when: false
 
     - name: Launch database container
+      become: true
       ansible.builtin.command:
         argv:
           - docker
@@ -129,6 +135,7 @@
       changed_when: true
 
     - name: Wait for database healthcheck
+      become: true
       ansible.builtin.command:
         argv:
           - docker
@@ -143,6 +150,7 @@
       changed_when: false
 
     - name: Launch application container
+      become: true
       ansible.builtin.command:
         argv:
           - docker
@@ -164,6 +172,7 @@
       changed_when: true
 
     - name: Launch proxy container
+      become: true
       ansible.builtin.command:
         argv:
           - docker
@@ -183,6 +192,7 @@
       changed_when: true
 
     - name: Show running TP1 containers
+      become: true
       ansible.builtin.command:
         argv:
           - docker
