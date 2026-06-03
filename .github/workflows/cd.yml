@@ -84,3 +84,40 @@ jobs:
           context: ./TP1/httpd
           tags: ${{ secrets.DOCKERHUB_USERNAME }}/tp-devops-httpd:latest
           push: true
+
+  deploy:
+    if: github.event.workflow_run.conclusion == 'success'
+    needs:
+      - build-and-push-backend
+      - build-and-push-database
+      - build-and-push-httpd
+    runs-on: ubuntu-24.04
+    env:
+      DEPLOY_PATH: ${{ vars.DEPLOY_PATH || '/home/admin/tp-devops/TP1' }}
+      SSH_HOST: ${{ secrets.SSH_HOST || vars.SSH_HOST }}
+      SSH_USER: ${{ secrets.SSH_USER || secrets.SSH_USERNAME || 'admin' }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+
+      - name: Configure SSH
+        env:
+          SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY || secrets.SSH_KEY }}
+        run: |
+          install -m 700 -d ~/.ssh
+          printf '%s\n' "$SSH_PRIVATE_KEY" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          ssh-keyscan -H "$SSH_HOST" >> ~/.ssh/known_hosts
+
+      - name: Upload production compose file
+        run: |
+          ssh -i ~/.ssh/deploy_key "$SSH_USER@$SSH_HOST" "mkdir -p '$DEPLOY_PATH'"
+          scp -i ~/.ssh/deploy_key TP1/docker-compose.prod.yml "$SSH_USER@$SSH_HOST:$DEPLOY_PATH/docker-compose.yml"
+
+      - name: Pull images and restart services
+        env:
+          DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+        run: |
+          ssh -i ~/.ssh/deploy_key "$SSH_USER@$SSH_HOST" "cd '$DEPLOY_PATH' && test -f ./simpleapi/.env && export DOCKERHUB_USERNAME='$DOCKERHUB_USERNAME' && docker compose pull && docker compose up -d --remove-orphans"
