@@ -97,6 +97,15 @@ jobs:
       SSH_HOST: ${{ secrets.SSH_HOST || vars.SSH_HOST || 'nicolas.demars.takima.school' }}
       SSH_USER: ${{ secrets.SSH_USER || secrets.SSH_USERNAME || vars.SSH_USER || vars.SSH_USERNAME || 'admin' }}
       SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY || secrets.SSH_KEY }}
+      DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+      DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+      POSTGRES_USER: ${{ secrets.POSTGRES_USER || vars.POSTGRES_USER }}
+      POSTGRES_PASSWORD: ${{ secrets.POSTGRES_PASSWORD || vars.POSTGRES_PASSWORD }}
+      POSTGRES_DB: ${{ secrets.POSTGRES_DB || vars.POSTGRES_DB }}
+      SIMPLEAPI_HOST: ${{ secrets.SIMPLEAPI_HOST || vars.SIMPLEAPI_HOST || 'app' }}
+      DB_HOST: ${{ secrets.DB_HOST || vars.DB_HOST || 'database' }}
+      JAVA_HOST: ${{ secrets.JAVA_HOST || vars.JAVA_HOST || 'java-simple-api' }}
+      SERVER_PORT: ${{ secrets.SERVER_PORT || vars.SERVER_PORT || '8080' }}
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -122,6 +131,21 @@ jobs:
             missing=1
           fi
 
+          if [ -z "$DOCKERHUB_USERNAME" ]; then
+            echo "::error::Missing DOCKERHUB_USERNAME secret."
+            missing=1
+          fi
+
+          if [ -z "$DOCKERHUB_TOKEN" ]; then
+            echo "::error::Missing DOCKERHUB_TOKEN secret."
+            missing=1
+          fi
+
+          if [ -z "$POSTGRES_USER" ] || [ -z "$POSTGRES_PASSWORD" ] || [ -z "$POSTGRES_DB" ]; then
+            echo "::error::Missing POSTGRES_USER, POSTGRES_PASSWORD or POSTGRES_DB secret."
+            missing=1
+          fi
+
           exit "$missing"
 
       - name: Configure SSH
@@ -131,122 +155,21 @@ jobs:
           chmod 600 ~/.ssh/deploy_key
           ssh-keyscan -H "$SSH_HOST" >> ~/.ssh/known_hosts
 
-      - name: Prepare production env file
-        env:
-          POSTGRES_USER: ${{ secrets.POSTGRES_USER || vars.POSTGRES_USER }}
-          POSTGRES_PASSWORD: ${{ secrets.POSTGRES_PASSWORD || vars.POSTGRES_PASSWORD }}
-          POSTGRES_DB: ${{ secrets.POSTGRES_DB || vars.POSTGRES_DB }}
-          SIMPLEAPI_HOST: ${{ secrets.SIMPLEAPI_HOST || vars.SIMPLEAPI_HOST || 'app' }}
-          DB_HOST: ${{ secrets.DB_HOST || vars.DB_HOST }}
-          JAVA_HOST: ${{ secrets.JAVA_HOST || vars.JAVA_HOST }}
-          SERVER_PORT: ${{ secrets.SERVER_PORT || vars.SERVER_PORT }}
+      - name: Set up Python for Ansible
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install Ansible
         run: |
-          if [ -n "$POSTGRES_USER" ] && [ -n "$POSTGRES_PASSWORD" ] && [ -n "$POSTGRES_DB" ]; then
-            {
-              printf 'POSTGRES_USER=%s\n' "$POSTGRES_USER"
-              printf 'POSTGRES_PASSWORD=%s\n' "$POSTGRES_PASSWORD"
-              printf 'POSTGRES_DB=%s\n' "$POSTGRES_DB"
-              printf 'SIMPLEAPI_HOST=%s\n' "$SIMPLEAPI_HOST"
+          python -m pip install ansible-core
 
-              if [ -n "$DB_HOST" ]; then
-                printf 'DB_HOST=%s\n' "$DB_HOST"
-              fi
-
-              if [ -n "$JAVA_HOST" ]; then
-                printf 'JAVA_HOST=%s\n' "$JAVA_HOST"
-              fi
-
-              if [ -n "$SERVER_PORT" ]; then
-                printf 'SERVER_PORT=%s\n' "$SERVER_PORT"
-              fi
-            } > production.env
-          fi
-
-      - name: Upload production env file
+      - name: Create Ansible inventory
         run: |
-          ssh -i ~/.ssh/deploy_key "$SSH_USER@$SSH_HOST" "mkdir -p '$DEPLOY_PATH/simpleapi'"
+          {
+            printf '[prod]\n'
+            printf '%s ansible_user=%s ansible_ssh_private_key_file=%s ansible_python_interpreter=/usr/bin/python3\n' "$SSH_HOST" "$SSH_USER" "$HOME/.ssh/deploy_key"
+          } > ansible/inventory.ini
 
-          if [ -f production.env ]; then
-            scp -i ~/.ssh/deploy_key production.env "$SSH_USER@$SSH_HOST:$DEPLOY_PATH/simpleapi/.env"
-          fi
-
-      - name: Check remote env file
-        run: |
-          ssh -i ~/.ssh/deploy_key "$SSH_USER@$SSH_HOST" "cd '$DEPLOY_PATH' && if [ ! -f ./simpleapi/.env ]; then echo '::error::Missing ./simpleapi/.env on the server. Add POSTGRES_USER, POSTGRES_PASSWORD and POSTGRES_DB as GitHub secrets, or set DEPLOY_PATH to the folder where you already deployed the app manually.'; exit 1; fi"
-
-      - name: Login to DockerHub on remote server
-        env:
-          DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
-          DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
-        run: |
-          printf '%s\n' "$DOCKERHUB_TOKEN" | ssh -i ~/.ssh/deploy_key "$SSH_USER@$SSH_HOST" "docker login -u '$DOCKERHUB_USERNAME' --password-stdin"
-
-      - name: Pull images and restart services
-        env:
-          DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
-        run: |
-          ssh -i ~/.ssh/deploy_key "$SSH_USER@$SSH_HOST" "DOCKERHUB_USERNAME='$DOCKERHUB_USERNAME' DEPLOY_PATH='$DEPLOY_PATH' bash -s" <<'REMOTE'
-          set -euo pipefail
-
-          cd "$DEPLOY_PATH"
-
-          docker network create app-network 2>/dev/null || true
-          docker volume create database-data >/dev/null
-
-          docker pull "$DOCKERHUB_USERNAME/tp-devops-database:latest"
-          docker pull "$DOCKERHUB_USERNAME/tp-devops-simple-api:latest"
-          docker pull "$DOCKERHUB_USERNAME/tp-devops-httpd:latest"
-
-          docker rm -f proxy app database 2>/dev/null || true
-
-          docker run -d \
-            --name database \
-            --network app-network \
-            --env-file ./simpleapi/.env \
-            -v database-data:/var/lib/postgresql/data \
-            --health-cmd='pg_isready -U "$POSTGRES_USER" -d "$POSTGRES_DB"' \
-            --health-interval=10s \
-            --health-timeout=5s \
-            --health-retries=5 \
-            --restart unless-stopped \
-            "$DOCKERHUB_USERNAME/tp-devops-database:latest"
-
-          for attempt in $(seq 1 30); do
-            status="$(docker inspect -f '{{.State.Health.Status}}' database)"
-
-            if [ "$status" = "healthy" ]; then
-              break
-            fi
-
-            if [ "$status" = "unhealthy" ]; then
-              docker logs database
-              exit 1
-            fi
-
-            sleep 2
-          done
-
-          if [ "$(docker inspect -f '{{.State.Health.Status}}' database)" != "healthy" ]; then
-            docker logs database
-            exit 1
-          fi
-
-          docker run -d \
-            --name app \
-            --network app-network \
-            --network-alias backend \
-            --network-alias java-simple-api \
-            --env-file ./simpleapi/.env \
-            --restart unless-stopped \
-            "$DOCKERHUB_USERNAME/tp-devops-simple-api:latest"
-
-          docker run -d \
-            --name proxy \
-            --network app-network \
-            --env-file ./simpleapi/.env \
-            -p 80:80 \
-            --restart unless-stopped \
-            "$DOCKERHUB_USERNAME/tp-devops-httpd:latest"
-
-          docker ps --filter name=database --filter name=app --filter name=proxy
-          REMOTE
+      - name: Deploy with Ansible
+        run: ansible-playbook -i ansible/inventory.ini ansible/deploy.yml

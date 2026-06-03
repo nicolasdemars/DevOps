@@ -1,0 +1,196 @@
+---
+- name: Deploy TP1 application
+  hosts: prod
+  gather_facts: false
+  vars:
+    deploy_path: "{{ lookup('env', 'DEPLOY_PATH') | default('/home/admin/tp-devops/TP1', true) }}"
+    dockerhub_username: "{{ lookup('env', 'DOCKERHUB_USERNAME') }}"
+    dockerhub_token: "{{ lookup('env', 'DOCKERHUB_TOKEN') }}"
+    postgres_user: "{{ lookup('env', 'POSTGRES_USER') }}"
+    postgres_password: "{{ lookup('env', 'POSTGRES_PASSWORD') }}"
+    postgres_db: "{{ lookup('env', 'POSTGRES_DB') }}"
+    simpleapi_host: "{{ lookup('env', 'SIMPLEAPI_HOST') | default('app', true) }}"
+    db_host: "{{ lookup('env', 'DB_HOST') | default('database', true) }}"
+    java_host: "{{ lookup('env', 'JAVA_HOST') | default('java-simple-api', true) }}"
+    server_port: "{{ lookup('env', 'SERVER_PORT') | default('8080', true) }}"
+    docker_network: app-network
+    database_volume: database-data
+    database_image: "{{ dockerhub_username }}/tp-devops-database:latest"
+    app_image: "{{ dockerhub_username }}/tp-devops-simple-api:latest"
+    proxy_image: "{{ dockerhub_username }}/tp-devops-httpd:latest"
+
+  tasks:
+    - name: Check deployment variables
+      ansible.builtin.assert:
+        that:
+          - dockerhub_username | length > 0
+          - dockerhub_token | length > 0
+          - postgres_user | length > 0
+          - postgres_password | length > 0
+          - postgres_db | length > 0
+
+    - name: Create deployment directories
+      ansible.builtin.file:
+        path: "{{ deploy_path }}/simpleapi"
+        state: directory
+        mode: "0755"
+
+    - name: Write production env file
+      ansible.builtin.copy:
+        dest: "{{ deploy_path }}/simpleapi/.env"
+        mode: "0600"
+        content: |
+          POSTGRES_USER={{ postgres_user }}
+          POSTGRES_PASSWORD={{ postgres_password }}
+          POSTGRES_DB={{ postgres_db }}
+          SIMPLEAPI_HOST={{ simpleapi_host }}
+          DB_HOST={{ db_host }}
+          JAVA_HOST={{ java_host }}
+          SERVER_PORT={{ server_port }}
+      no_log: true
+
+    - name: Login to DockerHub
+      ansible.builtin.command:
+        cmd: docker login -u "{{ dockerhub_username }}" --password-stdin
+        stdin: "{{ dockerhub_token }}"
+      no_log: true
+      changed_when: false
+
+    - name: Create Docker network
+      ansible.builtin.command:
+        argv:
+          - docker
+          - network
+          - create
+          - "{{ docker_network }}"
+      register: create_network
+      changed_when: create_network.rc == 0
+      failed_when: create_network.rc != 0 and 'already exists' not in create_network.stderr
+
+    - name: Create database volume
+      ansible.builtin.command:
+        argv:
+          - docker
+          - volume
+          - create
+          - "{{ database_volume }}"
+      changed_when: false
+
+    - name: Pull Docker images
+      ansible.builtin.command:
+        argv:
+          - docker
+          - pull
+          - "{{ item }}"
+      loop:
+        - "{{ database_image }}"
+        - "{{ app_image }}"
+        - "{{ proxy_image }}"
+      changed_when: true
+
+    - name: Remove previous containers
+      ansible.builtin.command:
+        argv:
+          - docker
+          - rm
+          - -f
+          - proxy
+          - app
+          - database
+      register: remove_containers
+      changed_when: remove_containers.rc == 0
+      failed_when: false
+
+    - name: Launch database container
+      ansible.builtin.command:
+        argv:
+          - docker
+          - run
+          - -d
+          - --name
+          - database
+          - --network
+          - "{{ docker_network }}"
+          - --env-file
+          - "{{ deploy_path }}/simpleapi/.env"
+          - -v
+          - "{{ database_volume }}:/var/lib/postgresql/data"
+          - --health-cmd
+          - pg_isready -U "$POSTGRES_USER" -d "$POSTGRES_DB"
+          - --health-interval
+          - 10s
+          - --health-timeout
+          - 5s
+          - --health-retries
+          - "5"
+          - --restart
+          - unless-stopped
+          - "{{ database_image }}"
+      changed_when: true
+
+    - name: Wait for database healthcheck
+      ansible.builtin.command:
+        argv:
+          - docker
+          - inspect
+          - -f
+          - "{{ '{{.State.Health.Status}}' }}"
+          - database
+      register: database_health
+      until: database_health.stdout == "healthy"
+      retries: 30
+      delay: 2
+      changed_when: false
+
+    - name: Launch application container
+      ansible.builtin.command:
+        argv:
+          - docker
+          - run
+          - -d
+          - --name
+          - app
+          - --network
+          - "{{ docker_network }}"
+          - --network-alias
+          - backend
+          - --network-alias
+          - java-simple-api
+          - --env-file
+          - "{{ deploy_path }}/simpleapi/.env"
+          - --restart
+          - unless-stopped
+          - "{{ app_image }}"
+      changed_when: true
+
+    - name: Launch proxy container
+      ansible.builtin.command:
+        argv:
+          - docker
+          - run
+          - -d
+          - --name
+          - proxy
+          - --network
+          - "{{ docker_network }}"
+          - --env-file
+          - "{{ deploy_path }}/simpleapi/.env"
+          - -p
+          - 80:80
+          - --restart
+          - unless-stopped
+          - "{{ proxy_image }}"
+      changed_when: true
+
+    - name: Show running TP1 containers
+      ansible.builtin.command:
+        argv:
+          - docker
+          - ps
+          - --filter
+          - name=database
+          - --filter
+          - name=app
+          - --filter
+          - name=proxy
+      changed_when: false
