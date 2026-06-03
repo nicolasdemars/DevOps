@@ -94,30 +94,89 @@ jobs:
     runs-on: ubuntu-24.04
     env:
       DEPLOY_PATH: ${{ vars.DEPLOY_PATH || '/home/admin/tp-devops/TP1' }}
-      SSH_HOST: ${{ secrets.SSH_HOST || vars.SSH_HOST }}
-      SSH_USER: ${{ secrets.SSH_USER || secrets.SSH_USERNAME || 'admin' }}
+      SSH_HOST: ${{ secrets.SSH_HOST || vars.SSH_HOST || 'nicolas.demars.takima.school' }}
+      SSH_USER: ${{ secrets.SSH_USER || secrets.SSH_USERNAME || vars.SSH_USER || vars.SSH_USERNAME || 'admin' }}
+      SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY || secrets.SSH_KEY }}
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
         with:
           ref: ${{ github.event.workflow_run.head_sha }}
 
+      - name: Check deployment configuration
+        run: |
+          missing=0
+
+          if [ -z "$SSH_HOST" ]; then
+            echo "::error::Missing SSH_HOST secret or variable."
+            missing=1
+          fi
+
+          if [ -z "$SSH_USER" ]; then
+            echo "::error::Missing SSH_USER secret or variable."
+            missing=1
+          fi
+
+          if [ -z "$SSH_PRIVATE_KEY" ]; then
+            echo "::error::Missing SSH_PRIVATE_KEY secret. Add the private key that can connect to the server."
+            missing=1
+          fi
+
+          exit "$missing"
+
       - name: Configure SSH
-        env:
-          SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY || secrets.SSH_KEY }}
         run: |
           install -m 700 -d ~/.ssh
           printf '%s\n' "$SSH_PRIVATE_KEY" > ~/.ssh/deploy_key
           chmod 600 ~/.ssh/deploy_key
           ssh-keyscan -H "$SSH_HOST" >> ~/.ssh/known_hosts
 
+      - name: Prepare production env file
+        env:
+          POSTGRES_USER: ${{ secrets.POSTGRES_USER || vars.POSTGRES_USER }}
+          POSTGRES_PASSWORD: ${{ secrets.POSTGRES_PASSWORD || vars.POSTGRES_PASSWORD }}
+          POSTGRES_DB: ${{ secrets.POSTGRES_DB || vars.POSTGRES_DB }}
+          SIMPLEAPI_HOST: ${{ secrets.SIMPLEAPI_HOST || vars.SIMPLEAPI_HOST || 'backend' }}
+          DB_HOST: ${{ secrets.DB_HOST || vars.DB_HOST }}
+          JAVA_HOST: ${{ secrets.JAVA_HOST || vars.JAVA_HOST }}
+          SERVER_PORT: ${{ secrets.SERVER_PORT || vars.SERVER_PORT }}
+        run: |
+          if [ -n "$POSTGRES_USER" ] && [ -n "$POSTGRES_PASSWORD" ] && [ -n "$POSTGRES_DB" ]; then
+            {
+              printf 'POSTGRES_USER=%s\n' "$POSTGRES_USER"
+              printf 'POSTGRES_PASSWORD=%s\n' "$POSTGRES_PASSWORD"
+              printf 'POSTGRES_DB=%s\n' "$POSTGRES_DB"
+              printf 'SIMPLEAPI_HOST=%s\n' "$SIMPLEAPI_HOST"
+
+              if [ -n "$DB_HOST" ]; then
+                printf 'DB_HOST=%s\n' "$DB_HOST"
+              fi
+
+              if [ -n "$JAVA_HOST" ]; then
+                printf 'JAVA_HOST=%s\n' "$JAVA_HOST"
+              fi
+
+              if [ -n "$SERVER_PORT" ]; then
+                printf 'SERVER_PORT=%s\n' "$SERVER_PORT"
+              fi
+            } > production.env
+          fi
+
       - name: Upload production compose file
         run: |
-          ssh -i ~/.ssh/deploy_key "$SSH_USER@$SSH_HOST" "mkdir -p '$DEPLOY_PATH'"
+          ssh -i ~/.ssh/deploy_key "$SSH_USER@$SSH_HOST" "mkdir -p '$DEPLOY_PATH/simpleapi'"
           scp -i ~/.ssh/deploy_key TP1/docker-compose.prod.yml "$SSH_USER@$SSH_HOST:$DEPLOY_PATH/docker-compose.yml"
+
+          if [ -f production.env ]; then
+            scp -i ~/.ssh/deploy_key production.env "$SSH_USER@$SSH_HOST:$DEPLOY_PATH/simpleapi/.env"
+          fi
+
+      - name: Check remote env file
+        run: |
+          ssh -i ~/.ssh/deploy_key "$SSH_USER@$SSH_HOST" "cd '$DEPLOY_PATH' && if [ ! -f ./simpleapi/.env ]; then echo '::error::Missing ./simpleapi/.env on the server. Add POSTGRES_USER, POSTGRES_PASSWORD and POSTGRES_DB as GitHub secrets, or set DEPLOY_PATH to the folder where you already deployed the app manually.'; exit 1; fi"
 
       - name: Pull images and restart services
         env:
           DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
         run: |
-          ssh -i ~/.ssh/deploy_key "$SSH_USER@$SSH_HOST" "cd '$DEPLOY_PATH' && test -f ./simpleapi/.env && export DOCKERHUB_USERNAME='$DOCKERHUB_USERNAME' && docker compose pull && docker compose up -d --remove-orphans"
+          ssh -i ~/.ssh/deploy_key "$SSH_USER@$SSH_HOST" "cd '$DEPLOY_PATH' && export DOCKERHUB_USERNAME='$DOCKERHUB_USERNAME' && docker compose pull && docker compose up -d --remove-orphans"
