@@ -162,10 +162,9 @@ jobs:
             } > production.env
           fi
 
-      - name: Upload production compose file
+      - name: Upload production env file
         run: |
           ssh -i ~/.ssh/deploy_key "$SSH_USER@$SSH_HOST" "mkdir -p '$DEPLOY_PATH/simpleapi'"
-          scp -i ~/.ssh/deploy_key TP1/docker-compose.prod.yml "$SSH_USER@$SSH_HOST:$DEPLOY_PATH/docker-compose.yml"
 
           if [ -f production.env ]; then
             scp -i ~/.ssh/deploy_key production.env "$SSH_USER@$SSH_HOST:$DEPLOY_PATH/simpleapi/.env"
@@ -175,12 +174,79 @@ jobs:
         run: |
           ssh -i ~/.ssh/deploy_key "$SSH_USER@$SSH_HOST" "cd '$DEPLOY_PATH' && if [ ! -f ./simpleapi/.env ]; then echo '::error::Missing ./simpleapi/.env on the server. Add POSTGRES_USER, POSTGRES_PASSWORD and POSTGRES_DB as GitHub secrets, or set DEPLOY_PATH to the folder where you already deployed the app manually.'; exit 1; fi"
 
-      - name: Remove legacy manually deployed containers
+      - name: Login to DockerHub on remote server
+        env:
+          DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+          DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
         run: |
-          ssh -i ~/.ssh/deploy_key "$SSH_USER@$SSH_HOST" "docker rm -f proxy app database 2>/dev/null || true"
+          printf '%s\n' "$DOCKERHUB_TOKEN" | ssh -i ~/.ssh/deploy_key "$SSH_USER@$SSH_HOST" "docker login -u '$DOCKERHUB_USERNAME' --password-stdin"
 
       - name: Pull images and restart services
         env:
           DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
         run: |
-          ssh -i ~/.ssh/deploy_key "$SSH_USER@$SSH_HOST" "cd '$DEPLOY_PATH' && export DOCKERHUB_USERNAME='$DOCKERHUB_USERNAME' && docker compose config && docker compose pull && docker compose up -d --remove-orphans"
+          ssh -i ~/.ssh/deploy_key "$SSH_USER@$SSH_HOST" "DOCKERHUB_USERNAME='$DOCKERHUB_USERNAME' DEPLOY_PATH='$DEPLOY_PATH' bash -s" <<'REMOTE'
+          set -euo pipefail
+
+          cd "$DEPLOY_PATH"
+
+          docker network create app-network 2>/dev/null || true
+          docker volume create database-data >/dev/null
+
+          docker pull "$DOCKERHUB_USERNAME/tp-devops-database:latest"
+          docker pull "$DOCKERHUB_USERNAME/tp-devops-simple-api:latest"
+          docker pull "$DOCKERHUB_USERNAME/tp-devops-httpd:latest"
+
+          docker rm -f proxy app database 2>/dev/null || true
+
+          docker run -d \
+            --name database \
+            --network app-network \
+            --env-file ./simpleapi/.env \
+            -v database-data:/var/lib/postgresql/data \
+            --health-cmd='pg_isready -U "$POSTGRES_USER" -d "$POSTGRES_DB"' \
+            --health-interval=10s \
+            --health-timeout=5s \
+            --health-retries=5 \
+            --restart unless-stopped \
+            "$DOCKERHUB_USERNAME/tp-devops-database:latest"
+
+          for attempt in $(seq 1 30); do
+            status="$(docker inspect -f '{{.State.Health.Status}}' database)"
+
+            if [ "$status" = "healthy" ]; then
+              break
+            fi
+
+            if [ "$status" = "unhealthy" ]; then
+              docker logs database
+              exit 1
+            fi
+
+            sleep 2
+          done
+
+          if [ "$(docker inspect -f '{{.State.Health.Status}}' database)" != "healthy" ]; then
+            docker logs database
+            exit 1
+          fi
+
+          docker run -d \
+            --name app \
+            --network app-network \
+            --network-alias backend \
+            --network-alias java-simple-api \
+            --env-file ./simpleapi/.env \
+            --restart unless-stopped \
+            "$DOCKERHUB_USERNAME/tp-devops-simple-api:latest"
+
+          docker run -d \
+            --name proxy \
+            --network app-network \
+            --env-file ./simpleapi/.env \
+            -p 80:80 \
+            --restart unless-stopped \
+            "$DOCKERHUB_USERNAME/tp-devops-httpd:latest"
+
+          docker ps --filter name=database --filter name=app --filter name=proxy
+          REMOTE
