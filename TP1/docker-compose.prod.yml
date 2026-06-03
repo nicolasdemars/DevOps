@@ -1,5 +1,6 @@
 services:
   database:
+    container_name: database
     image: ${DOCKERHUB_USERNAME}/tp-devops-database:latest
     env_file:
       - ./simpleapi/.env
@@ -14,18 +15,23 @@ services:
       retries: 5
     restart: unless-stopped
 
-  backend:
+  app:
+    container_name: app
     image: ${DOCKERHUB_USERNAME}/tp-devops-simple-api:latest
     env_file:
       - ./simpleapi/.env
     networks:
-      - app-network
+      app-network:
+        aliases:
+          - backend
+          - java-simple-api
     depends_on:
       database:
         condition: service_healthy
     restart: unless-stopped
 
-  httpd:
+  proxy:
+    container_name: proxy
     image: ${DOCKERHUB_USERNAME}/tp-devops-httpd:latest
     env_file:
       - ./simpleapi/.env
@@ -34,7 +40,7 @@ services:
     networks:
       - app-network
     depends_on:
-      - backend
+      - app
     restart: unless-stopped
 
 networks:

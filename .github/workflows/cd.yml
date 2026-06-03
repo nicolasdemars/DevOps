@@ -136,7 +136,7 @@ jobs:
           POSTGRES_USER: ${{ secrets.POSTGRES_USER || vars.POSTGRES_USER }}
           POSTGRES_PASSWORD: ${{ secrets.POSTGRES_PASSWORD || vars.POSTGRES_PASSWORD }}
           POSTGRES_DB: ${{ secrets.POSTGRES_DB || vars.POSTGRES_DB }}
-          SIMPLEAPI_HOST: ${{ secrets.SIMPLEAPI_HOST || vars.SIMPLEAPI_HOST || 'backend' }}
+          SIMPLEAPI_HOST: ${{ secrets.SIMPLEAPI_HOST || vars.SIMPLEAPI_HOST || 'app' }}
           DB_HOST: ${{ secrets.DB_HOST || vars.DB_HOST }}
           JAVA_HOST: ${{ secrets.JAVA_HOST || vars.JAVA_HOST }}
           SERVER_PORT: ${{ secrets.SERVER_PORT || vars.SERVER_PORT }}
@@ -175,8 +175,12 @@ jobs:
         run: |
           ssh -i ~/.ssh/deploy_key "$SSH_USER@$SSH_HOST" "cd '$DEPLOY_PATH' && if [ ! -f ./simpleapi/.env ]; then echo '::error::Missing ./simpleapi/.env on the server. Add POSTGRES_USER, POSTGRES_PASSWORD and POSTGRES_DB as GitHub secrets, or set DEPLOY_PATH to the folder where you already deployed the app manually.'; exit 1; fi"
 
+      - name: Remove legacy manually deployed containers
+        run: |
+          ssh -i ~/.ssh/deploy_key "$SSH_USER@$SSH_HOST" "docker rm -f proxy app database 2>/dev/null || true"
+
       - name: Pull images and restart services
         env:
           DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
         run: |
-          ssh -i ~/.ssh/deploy_key "$SSH_USER@$SSH_HOST" "cd '$DEPLOY_PATH' && export DOCKERHUB_USERNAME='$DOCKERHUB_USERNAME' && docker compose pull && docker compose up -d --remove-orphans"
+          ssh -i ~/.ssh/deploy_key "$SSH_USER@$SSH_HOST" "cd '$DEPLOY_PATH' && export DOCKERHUB_USERNAME='$DOCKERHUB_USERNAME' && docker compose config && docker compose pull && docker compose up -d --remove-orphans"
