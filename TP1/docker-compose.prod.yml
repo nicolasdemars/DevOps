@@ -15,16 +15,25 @@ services:
       retries: 5
     restart: unless-stopped
 
-  app:
-    container_name: app
+  app-blue:
+    container_name: app-blue
     image: ${DOCKERHUB_USERNAME}/tp-devops-simple-api:latest
     env_file:
       - ./simpleapi/.env
     networks:
-      app-network:
-        aliases:
-          - backend
-          - java-simple-api
+      - app-network
+    depends_on:
+      database:
+        condition: service_healthy
+    restart: unless-stopped
+
+  app-green:
+    container_name: app-green
+    image: ${DOCKERHUB_USERNAME}/tp-devops-simple-api:latest
+    env_file:
+      - ./simpleapi/.env
+    networks:
+      - app-network
     depends_on:
       database:
         condition: service_healthy
@@ -48,7 +57,8 @@ services:
       - app-network
     depends_on:
       - front
-      - app
+      - app-blue
+      - app-green
     restart: unless-stopped
 
 networks:

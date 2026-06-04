@@ -18,6 +18,8 @@ jobs:
       POSTGRES_DB: ${{ secrets.POSTGRES_DB || vars.POSTGRES_DB }}
       SIMPLEAPI_HOST: ${{ secrets.SIMPLEAPI_HOST || vars.SIMPLEAPI_HOST || 'app' }}
       FRONT_HOST: ${{ secrets.FRONT_HOST || vars.FRONT_HOST || 'front' }}
+      BACKEND_BLUE_HOST: ${{ secrets.BACKEND_BLUE_HOST || vars.BACKEND_BLUE_HOST || 'app-blue' }}
+      BACKEND_GREEN_HOST: ${{ secrets.BACKEND_GREEN_HOST || vars.BACKEND_GREEN_HOST || 'app-green' }}
       DB_HOST: ${{ secrets.DB_HOST || vars.DB_HOST || 'database' }}
       JAVA_HOST: ${{ secrets.JAVA_HOST || vars.JAVA_HOST || 'java-simple-api' }}
       SERVER_PORT: ${{ secrets.SERVER_PORT || vars.SERVER_PORT || '8080' }}

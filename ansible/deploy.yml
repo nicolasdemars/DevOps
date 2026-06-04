@@ -14,6 +14,8 @@
     java_host: "{{ lookup('env', 'JAVA_HOST') | default('java-simple-api', true) }}"
     server_port: "{{ lookup('env', 'SERVER_PORT') | default('8080', true) }}"
     front_host: "{{ lookup('env', 'FRONT_HOST') | default('front', true) }}"
+    backend_blue_host: "{{ lookup('env', 'BACKEND_BLUE_HOST') | default('app-blue', true) }}"
+    backend_green_host: "{{ lookup('env', 'BACKEND_GREEN_HOST') | default('app-green', true) }}"
     docker_network: app-network
     database_volume: database-data
     database_image: "{{ dockerhub_username }}/tp-devops-database:latest"
@@ -50,6 +52,8 @@
           JAVA_HOST={{ java_host }}
           SERVER_PORT={{ server_port }}
           FRONT_HOST={{ front_host }}
+          BACKEND_BLUE_HOST={{ backend_blue_host }}
+          BACKEND_GREEN_HOST={{ backend_green_host }}
       no_log: true
 
     - name: Login to DockerHub
@@ -106,6 +110,8 @@
           - proxy
           - front
           - app
+          - app-blue
+          - app-green
           - database
       register: remove_containers
       changed_when: remove_containers.rc == 0
@@ -154,7 +160,7 @@
       delay: 2
       changed_when: false
 
-    - name: Launch application container
+    - name: Launch blue application container
       become: true
       ansible.builtin.command:
         argv:
@@ -162,13 +168,31 @@
           - run
           - -d
           - --name
-          - app
+          - app-blue
           - --network
           - "{{ docker_network }}"
           - --network-alias
-          - backend
+          - "{{ backend_blue_host }}"
+          - --env-file
+          - "{{ deploy_path }}/simpleapi/.env"
+          - --restart
+          - unless-stopped
+          - "{{ app_image }}"
+      changed_when: true
+
+    - name: Launch green application container
+      become: true
+      ansible.builtin.command:
+        argv:
+          - docker
+          - run
+          - -d
+          - --name
+          - app-green
+          - --network
+          - "{{ docker_network }}"
           - --network-alias
-          - java-simple-api
+          - "{{ backend_green_host }}"
           - --env-file
           - "{{ deploy_path }}/simpleapi/.env"
           - --restart
@@ -221,7 +245,9 @@
           - --filter
           - name=database
           - --filter
-          - name=app
+          - name=app-blue
+          - --filter
+          - name=app-green
           - --filter
           - name=front
           - --filter
