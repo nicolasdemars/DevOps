@@ -46,6 +46,7 @@ jobs:
 
           backend_image="$DOCKERHUB_USERNAME/tp-devops-simple-api:latest"
           database_image="$DOCKERHUB_USERNAME/tp-devops-database:latest"
+          front_image="$DOCKERHUB_USERNAME/tp-devops-front:latest"
           httpd_image="$DOCKERHUB_USERNAME/tp-devops-httpd:latest"
 
           docker build --pull -t "$backend_image" ./TP1/simpleapi
@@ -53,6 +54,9 @@ jobs:
 
           docker build --pull -t "$database_image" ./TP1/database
           push_with_retry "$database_image"
+
+          docker build --pull -t "$front_image" ./TP1/devops-front-main
+          push_with_retry "$front_image"
 
           docker build --pull -t "$httpd_image" ./TP1/httpd
           push_with_retry "$httpd_image"

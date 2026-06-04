@@ -13,10 +13,12 @@
     db_host: "{{ lookup('env', 'DB_HOST') | default('database', true) }}"
     java_host: "{{ lookup('env', 'JAVA_HOST') | default('java-simple-api', true) }}"
     server_port: "{{ lookup('env', 'SERVER_PORT') | default('8080', true) }}"
+    front_host: "{{ lookup('env', 'FRONT_HOST') | default('front', true) }}"
     docker_network: app-network
     database_volume: database-data
     database_image: "{{ dockerhub_username }}/tp-devops-database:latest"
     app_image: "{{ dockerhub_username }}/tp-devops-simple-api:latest"
+    front_image: "{{ dockerhub_username }}/tp-devops-front:latest"
     proxy_image: "{{ dockerhub_username }}/tp-devops-httpd:latest"
 
   tasks:
@@ -47,6 +49,7 @@
           DB_HOST={{ db_host }}
           JAVA_HOST={{ java_host }}
           SERVER_PORT={{ server_port }}
+          FRONT_HOST={{ front_host }}
       no_log: true
 
     - name: Login to DockerHub
@@ -89,6 +92,7 @@
       loop:
         - "{{ database_image }}"
         - "{{ app_image }}"
+        - "{{ front_image }}"
         - "{{ proxy_image }}"
       changed_when: true
 
@@ -100,6 +104,7 @@
           - rm
           - -f
           - proxy
+          - front
           - app
           - database
       register: remove_containers
@@ -171,6 +176,22 @@
           - "{{ app_image }}"
       changed_when: true
 
+    - name: Launch front container
+      become: true
+      ansible.builtin.command:
+        argv:
+          - docker
+          - run
+          - -d
+          - --name
+          - front
+          - --network
+          - "{{ docker_network }}"
+          - --restart
+          - unless-stopped
+          - "{{ front_image }}"
+      changed_when: true
+
     - name: Launch proxy container
       become: true
       ansible.builtin.command:
@@ -201,6 +222,8 @@
           - name=database
           - --filter
           - name=app
+          - --filter
+          - name=front
           - --filter
           - name=proxy
       changed_when: false

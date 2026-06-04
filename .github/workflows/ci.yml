@@ -24,6 +24,17 @@ jobs:
         working-directory: TP1/simpleapi
         run: mvn -B clean verify
 
+  validate-front:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build front image
+        run: docker build -t tp-devops-front-ci ./TP1/devops-front-main
+
+      - name: Build proxy image
+        run: docker build -t tp-devops-httpd-ci ./TP1/httpd
+
   sonarcloud-analysis:
     needs: test-backend
     runs-on: ubuntu-24.04
